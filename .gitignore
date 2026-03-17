@@ -1,0 +1,39 @@
+# Secrets
+.env
+*.env
+
+# Config com dados reais (usar config.json.example como base)
+config.json
+
+# Estado runtime
+state/
+profiles/
+screenshots/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+venv/
+env/
+.venv/
+
+# Camoufox / Playwright
+.camoufox/
+.playwright/
+
+# Kill switch
+STOP
+
+# IDE
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log

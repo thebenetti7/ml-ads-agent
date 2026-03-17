@@ -1,0 +1,64 @@
+{
+  "contas": [673355109, 778944463, 2295471566],
+  "contas_config": {
+    "673355109": {
+      "margem": 0.08,
+      "roas_breakeven": 12.5,
+      "descricao": "Conta Principal"
+    },
+    "778944463": {
+      "margem": 0.10,
+      "roas_breakeven": 10.0,
+      "descricao": "Conta 2"
+    },
+    "2295471566": {
+      "margem": 0.12,
+      "roas_breakeven": 8.33,
+      "descricao": "Conta 3"
+    }
+  },
+  "browser": {
+    "type": "camoufox",
+    "headless": true,
+    "slow_motion_ms": 100,
+    "timeout_ms": 30000
+  },
+  "operacao": {
+    "work_blocks": [
+      [8, 0, 12, 0],
+      [13, 30, 18, 0],
+      [19, 0, 22, 0]
+    ],
+    "variacao_minutos": 30,
+    "timezone": "America/Sao_Paulo",
+    "keep_alive_interval_s": 7200,
+    "poll_interval_s": 90,
+    "sleep_min_s": 60,
+    "sleep_max_s": 120
+  },
+  "guardrails": {
+    "max_acoes_dia": 50,
+    "max_acoes_hora": 20,
+    "max_acoes_ciclo": 5,
+    "variacao_budget_max_pct": 15.0,
+    "variacao_roas_max_pct": 10.0,
+    "roas_min": 1.0,
+    "roas_max": 35.0,
+    "ram_min_livre_mb": 500,
+    "cpu_max_pct": 80,
+    "disco_min_livre_mb": 1000
+  },
+  "delays": {
+    "entre_acoes_min_ms": 3000,
+    "entre_acoes_max_ms": 10000,
+    "entre_contas_min_s": 180,
+    "entre_contas_max_s": 600
+  },
+  "diretorios": {
+    "state": "./state",
+    "profiles": "./profiles",
+    "screenshots": "./screenshots",
+    "logs": "./logs"
+  },
+  "dry_run": false
+}

@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Ads Agent - Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #0f3460;
+        }
+
+        h1 {
+            font-size: 28px;
+            font-weight: 600;
+            color: #00d4ff;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-badge.executando {
+            background: #00d962;
+            color: #000;
+        }
+
+        .status-badge.pausado {
+            background: #ff9500;
+            color: #000;
+        }
+
+        .status-badge.parado {
+            background: #ff3838;
+            color: #fff;
+        }
+
+        .status-badge.offline {
+            background: #888;
+            color: #fff;
+        }
+
+        .kill-switch-btn {
+            padding: 12px 24px;
+            background: #ff3838;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .kill-switch-btn:hover {
+            background: #cc2e2e;
+            transform: scale(1.05);
+        }
+
+        .kill-switch-btn.desactivar {
+            background: #00d962;
+        }
+
+        .kill-switch-btn.desactivar:hover {
+            background: #00b84d;
+        }
+
+        .mode-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 8px;
+        }
+
+        .mode-badge.vps { background: #00d4ff; color: #000; }
+        .mode-badge.offline { background: #ff9500; color: #000; }
+        .mode-badge.dry-run { background: #ff3838; color: #fff; }
+
+        .content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: #0f3460;
+            border: 1px solid #1a5490;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .card h2 {
+            font-size: 16px;
+            color: #00d4ff;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #1a5490;
+        }
+
+        .stat:last-child {
+            border-bottom: none;
+        }
+
+        .stat-label {
+            color: #b0b0b0;
+            font-size: 14px;
+        }
+
+        .stat-value {
+            color: #00d4ff;
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .stat-value.success { color: #00d962; }
+        .stat-value.warning { color: #ff9500; }
+        .stat-value.error { color: #ff3838; }
+
+        .sessions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .session-item {
+            background: #1a5490;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 13px;
+        }
+
+        .session-item.ativa { border: 2px solid #00d962; }
+        .session-item.inativa { border: 2px solid #666; opacity: 0.6; }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 13px;
+        }
+
+        thead { background: #1a5490; }
+
+        th {
+            padding: 12px;
+            text-align: left;
+            color: #00d4ff;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #1a5490;
+        }
+
+        tr:hover { background: #1a5490; }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge.success { background: #00d962; color: #000; }
+        .badge.error { background: #ff3838; color: #fff; }
+        .badge.info { background: #00d4ff; color: #000; }
+        .badge.simulada { background: #9b59b6; color: #fff; }
+
+        .timestamp {
+            color: #888;
+            font-size: 12px;
+        }
+
+        .auto-refresh {
+            color: #888;
+            font-size: 12px;
+            padding: 10px;
+            background: #1a5490;
+            border-radius: 8px;
+            text-align: right;
+        }
+
+        footer {
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #1a5490;
+        }
+
+        .error-banner {
+            background: #ff3838;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .error-banner.show { display: block; }
+
+        @media (max-width: 768px) {
+            .content { grid-template-columns: 1fr; }
+            header {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+            h1 { font-size: 22px; }
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #00d4ff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>ML Ads Agent</h1>
+                <p style="color: #888; margin-top: 5px;">Dashboard Local de Automacao</p>
+            </div>
+            <div>
+                <span class="status-badge" id="status-badge">CARREGANDO</span>
+                <span class="mode-badge" id="mode-badge" style="display:none"></span>
+                <button class="kill-switch-btn" id="kill-switch-btn">KILL SWITCH: OFF</button>
+            </div>
+        </header>
+
+        <div class="error-banner" id="error-banner"></div>
+
+        <div class="content" id="main-content">
+            <div class="card full-width">
+                <p style="text-align: center; color: #888;">Carregando dashboard...</p>
+            </div>
+        </div>
+
+        <div class="auto-refresh" id="auto-refresh">
+            Auto-atualizando em 30 segundos... <span class="spinner"></span>
+        </div>
+    </div>
+
+    <footer>
+        <p>ML Ads Agent v1.0.0 | Agente de automacao local para Mercado Ads</p>
+    </footer>
+
+    <script>
+        const API_BASE = "/api";
+        let killSwitchAtivo = false;
+        let autoRefreshInterval;
+
+        async function carregarDados() {
+            try {
+                const [status, changelog, sessoes, config] = await Promise.all([
+                    fetch(`${API_BASE}/agent/status`).then(r => r.json()),
+                    fetch(`${API_BASE}/dashboard/changelog`).then(r => r.json()),
+                    fetch(`${API_BASE}/dashboard/sessoes`).then(r => r.json()),
+                    fetch(`${API_BASE}/dashboard/config`).then(r => r.json())
+                ]);
+
+                renderizarDados(status, changelog, sessoes, config);
+                ocultarErro();
+            } catch (erro) {
+                mostrarErro(`Erro ao carregar dados: ${erro.message}`);
+                console.error(erro);
+            }
+        }
+
+        function renderizarDados(status, changelog, sessoes, config) {
+            // Mode badge
+            const modeBadge = document.getElementById('mode-badge');
+            modeBadge.style.display = 'inline-block';
+            if (status.dry_run) {
+                modeBadge.textContent = 'DRY-RUN';
+                modeBadge.className = 'mode-badge dry-run';
+            } else if (status.modo === 'offline') {
+                modeBadge.textContent = 'OFFLINE';
+                modeBadge.className = 'mode-badge offline';
+            } else {
+                modeBadge.textContent = 'VPS';
+                modeBadge.className = 'mode-badge vps';
+            }
+
+            const html = `
+                <!-- STATUS -->
+                <div class="card">
+                    <h2>Status do Agente</h2>
+                    <div class="stat">
+                        <span class="stat-label">Estado</span>
+                        <span class="stat-value ${getStatusClass(status.status)}">${status.status.toUpperCase()}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Uptime</span>
+                        <span class="stat-value">${formatarTempo(status.uptime_minutos)}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Conta Atual</span>
+                        <span class="stat-value">${status.conta_atual || '-'}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Modo</span>
+                        <span class="stat-value">${status.modo.toUpperCase()}</span>
+                    </div>
+                </div>
+
+                <!-- METRICAS DIARIAS -->
+                <div class="card">
+                    <h2>Metricas Diarias</h2>
+                    <div class="stat">
+                        <span class="stat-label">Acoes Processadas</span>
+                        <span class="stat-value success">${status.processadas_hoje}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Erros Hoje</span>
+                        <span class="stat-value ${status.erros_hoje > 0 ? 'error' : 'success'}">${status.erros_hoje}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Ultima Acao</span>
+                        <span class="stat-value timestamp">
+                            ${status.ultima_acao_tempo ? new Date(status.ultima_acao_tempo).toLocaleTimeString('pt-BR') : 'Nenhuma'}
+                        </span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">RAM</span>
+                        <span class="stat-value">${Math.round(status.memoria_mb)}MB</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">CPU</span>
+                        <span class="stat-value ${status.cpu_percent > 80 ? 'error' : ''}">${status.cpu_percent.toFixed(1)}%</span>
+                    </div>
+                </div>
+
+                <!-- LIMITES -->
+                <div class="card">
+                    <h2>Configuracao</h2>
+                    <div class="stat">
+                        <span class="stat-label">Acoes/Hora</span>
+                        <span class="stat-value">${config.max_acoes_hora}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Acoes/Dia</span>
+                        <span class="stat-value">${config.max_acoes_dia}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Acoes/Ciclo</span>
+                        <span class="stat-value">${config.max_acoes_ciclo}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Horarios</span>
+                        <span class="stat-value" style="font-size:12px">${config.work_blocks.join(', ')}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Dry-Run</span>
+                        <span class="stat-value ${config.dry_run ? 'warning' : 'success'}">${config.dry_run ? 'SIM' : 'NAO'}</span>
+                    </div>
+                </div>
+
+                <!-- SESSOES -->
+                <div class="card full-width">
+                    <h2>Sessoes por Conta</h2>
+                    <div class="sessions">
+                        ${Object.entries(sessoes).map(([conta, info]) => `
+                            <div class="session-item ${info.status === 'aberta' ? 'ativa' : 'inativa'}">
+                                <strong>Conta ${conta}</strong>
+                                <p style="color: #888; margin-top: 5px;">${info.status === 'aberta' ? 'Ativa' : 'Inativa'}</p>
+                                <p class="timestamp">${info.ultima_acao ? new Date(info.ultima_acao).toLocaleTimeString('pt-BR') : '-'}</p>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <!-- CHANGELOG -->
+                <div class="card full-width">
+                    <h2>Acoes de Hoje (${changelog.total})</h2>
+                    ${changelog.total > 0 ? `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Horario</th>
+                                    <th>Tipo</th>
+                                    <th>Conta</th>
+                                    <th>Campanha</th>
+                                    <th>Status</th>
+                                    <th>Tempo (ms)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${changelog.acoes.slice(-20).reverse().map(acao => `
+                                    <tr>
+                                        <td class="timestamp">${new Date(acao.timestamp).toLocaleTimeString('pt-BR')}</td>
+                                        <td>${acao.action_type || acao.tipo || '-'}</td>
+                                        <td>${acao.conta_id}</td>
+                                        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${acao.campaign_name || '-'}</td>
+                                        <td><span class="badge ${getStatusBadgeClass(acao.status)}">${acao.status}</span></td>
+                                        <td>${acao.duration_ms || '-'}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    ` : `
+                        <p style="color: #888; text-align: center; padding: 20px;">Nenhuma acao processada hoje</p>
+                    `}
+                </div>
+            `;
+
+            document.getElementById('main-content').innerHTML = html;
+            atualizarStatusBadge(status.status);
+        }
+
+        function getStatusClass(status) {
+            if (status === 'executando') return 'success';
+            if (status === 'pausado') return 'warning';
+            if (status === 'offline') return 'warning';
+            return 'error';
+        }
+
+        function getStatusBadgeClass(status) {
+            if (status === 'sucesso') return 'success';
+            if (status === 'erro') return 'error';
+            if (status === 'simulada' || status === 'simulado') return 'simulada';
+            return 'info';
+        }
+
+        function formatarTempo(minutos) {
+            const horas = Math.floor(minutos / 60);
+            const mins = Math.floor(minutos % 60);
+            return `${horas}h ${mins}m`;
+        }
+
+        function atualizarStatusBadge(status) {
+            const badge = document.getElementById('status-badge');
+            badge.textContent = status.toUpperCase();
+            badge.className = `status-badge ${status.toLowerCase()}`;
+        }
+
+        async function toggleKillSwitch() {
+            const novoEstado = !killSwitchAtivo;
+
+            try {
+                const response = await fetch(`${API_BASE}/dashboard/kill-switch?ativar=${novoEstado}`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    killSwitchAtivo = novoEstado;
+                    atualizarBotaoKillSwitch();
+                    carregarDados();
+                }
+            } catch (erro) {
+                mostrarErro(`Erro ao toggle kill switch: ${erro.message}`);
+            }
+        }
+
+        function atualizarBotaoKillSwitch() {
+            const btn = document.getElementById('kill-switch-btn');
+            if (killSwitchAtivo) {
+                btn.textContent = 'KILL SWITCH: ON';
+                btn.classList.add('desactivar');
+            } else {
+                btn.textContent = 'KILL SWITCH: OFF';
+                btn.classList.remove('desactivar');
+            }
+        }
+
+        function mostrarErro(mensagem) {
+            const banner = document.getElementById('error-banner');
+            banner.textContent = mensagem;
+            banner.classList.add('show');
+        }
+
+        function ocultarErro() {
+            const banner = document.getElementById('error-banner');
+            banner.classList.remove('show');
+        }
+
+        function iniciarAutoRefresh() {
+            carregarDados();
+            autoRefreshInterval = setInterval(() => {
+                carregarDados();
+            }, 30000);
+        }
+
+        document.getElementById('kill-switch-btn').addEventListener('click', toggleKillSwitch);
+        iniciarAutoRefresh();
+    </script>
+</body>
+</html>
