@@ -58,57 +58,50 @@ async def navegar_para_campanhas(page) -> bool:
             await _aguardar_campanhas_carregar(page)
             return True
 
+        # Aguardar SPA carregar (ate 8s)
+        await asyncio.sleep(4)
+
         logger.info(f"Na pagina: {page.url} — buscando link 'Ir para Product Ads'")
 
-        # Aguardar link aparecer (ate 10s)
-        try:
-            await page.wait_for_function(
-                """() => {
-                    const links = Array.from(document.querySelectorAll('a'));
-                    return links.some(a => (a.innerText || '').includes('Product Ads'));
-                }""",
-                timeout=10000,
-            )
-        except Exception:
-            pass
+        # Log diagnostico: listar todos os hrefs com 'ads' ou 'product' na pagina
+        todos_links = await page.evaluate("""() => {
+            return Array.from(document.querySelectorAll('a[href]')).map(a => ({
+                txt: (a.innerText || a.textContent || '').trim().substring(0, 60),
+                href: a.href,
+            })).filter(x => x.href && (
+                x.href.includes('product') || x.href.includes('ads') ||
+                x.txt.toLowerCase().includes('product') || x.txt.toLowerCase().includes('ads')
+            )).slice(0, 10);
+        }""")
+        logger.info(f"Links encontrados na pagina: {todos_links}")
 
         # Pegar o href do link "Ir para Product Ads"
         href = await page.evaluate("""() => {
-            const links = Array.from(document.querySelectorAll('a'));
+            const links = Array.from(document.querySelectorAll('a[href]'));
             for (const a of links) {
                 const txt = (a.innerText || a.textContent || '').trim();
                 if (txt.includes('Product Ads')) {
-                    return a.href || null;
+                    return a.href;
+                }
+            }
+            // Fallback: qualquer link com 'product-ads' no href
+            for (const a of links) {
+                if (a.href && a.href.includes('product-ads')) {
+                    return a.href;
                 }
             }
             return null;
         }""")
 
         if href:
-            logger.info(f"Link 'Ir para Product Ads' encontrado: {href}")
+            logger.info(f"Link encontrado: {href}")
             await page.goto(href, wait_until="networkidle", timeout=30000)
             await asyncio.sleep(2)
             await _aguardar_campanhas_carregar(page)
-            logger.info(f"Navegou para Product Ads: {page.url}")
+            logger.info(f"Navegou para: {page.url}")
             return True
 
-        # Extrair advertiserId da URL atual e montar URL direto
-        import re as _re
-        match = _re.search(r'advertiserId=(\d+)', page.url)
-        adv_id = match.group(1) if match else None
-        if adv_id:
-            campaigns_url = f"https://ads.mercadolivre.com.br/product-ads/campaigns?advertiserId={adv_id}"
-        else:
-            campaigns_url = "https://ads.mercadolivre.com.br/product-ads/campaigns"
-
-        await page.goto(campaigns_url, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(2)
-        await _aguardar_campanhas_carregar(page)
-        if not await _detectar_login_redirect(page):
-            logger.info(f"Navegou direto para: {campaigns_url}")
-            return True
-
-        logger.warning("Nao conseguiu navegar para lista de campanhas")
+        logger.warning(f"Link 'Ir para Product Ads' nao encontrado. URL atual: {page.url}")
         return False
 
     except Exception as e:
