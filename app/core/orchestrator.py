@@ -165,6 +165,10 @@ class Orchestrator:
             except Exception as e:
                 logger.error(f"Erro ao processar conta {conta_id}: {e}")
                 self.state_manager.registrar_erro(conta_id, str(e))
+                # Garantir que qualquer work em andamento seja reportado como failed
+                # para nao ficar stuck in_progress na VPS
+                if self.vps_client.online:
+                    await self.vps_client.abandonar_work_atual(conta_id)
 
             # Delay entre contas
             if i < len(self.config.contas) - 1:

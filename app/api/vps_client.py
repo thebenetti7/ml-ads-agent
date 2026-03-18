@@ -270,6 +270,20 @@ class VPSClient:
             logger.warning(f"[VPS] Falha ao reportar resultado: {response.status_code}")
         return ok
 
+    async def abandonar_work_atual(self, conta_id: int) -> bool:
+        """Reporta trabalho em andamento como failed (chamado em caso de erro de processamento)."""
+        work = self._current_work.get(conta_id)
+        if not work:
+            return True
+        work_id = work["work_id"]
+        logger.warning(f"[VPS] Abandonando work_id={work_id} para conta {conta_id} (erro de processamento)")
+        ok = await self._reportar_work(
+            work_id, "failed", work.get("results", []),
+            error="Abandonado pelo agente (excecao durante processamento)"
+        )
+        self._current_work.pop(conta_id, None)
+        return ok
+
     # ==================== HEARTBEAT (no-op — VPS nao tem endpoint) ====================
 
     async def enviar_heartbeat(self, heartbeat) -> Optional[dict]:
