@@ -13,8 +13,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # URLs do painel ML Ads
-ML_ADS_HOME = "https://ads.mercadolivre.com.br/"
-ML_ADS_CAMPAIGNS = "https://ads.mercadolivre.com.br/"
+# IMPORTANTE: partir de advertising/home no dominio principal (onde o browser esta logado)
+# Esse URL faz SSO e redireciona para ads.mercadolivre.com.br autenticado
+ML_ADS_HOME = "https://www.mercadolivre.com.br/advertising/home"
 ML_LOGIN = "https://www.mercadolivre.com.br/jms/mlb/lgz/login"
 
 
