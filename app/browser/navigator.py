@@ -45,25 +45,66 @@ async def navegar_para_ads(page) -> bool:
 async def navegar_para_campanhas(page) -> bool:
     """Navega para a lista de campanhas de Product Ads."""
     try:
+        # Se ja esta na pagina de campanhas, nao precisa navegar
+        url_atual = page.url.lower()
+        if "product-ads" in url_atual and "campaign" in url_atual:
+            logger.info(f"Ja esta na pagina de campanhas: {page.url}")
+            await _aguardar_campanhas_carregar(page)
+            return True
+
+        # Navegar para home do ML Ads (SPA vai redirecionar para hub/summary?advertiserId=X)
         await page.goto(ML_ADS_HOME, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(2)
 
         if await _detectar_login_redirect(page):
             return False
 
-        # Se ja esta na pagina de campanhas, ok
-        url_atual = page.url.lower()
-        if "product-ads" in url_atual and ("campaign" in url_atual or "product-ads" in url_atual):
-            logger.info(f"Ja esta na pagina de Product Ads: {page.url}")
+        # Aguardar o SPA redirecionar para hub/summary (ate 20s)
+        for _ in range(20):
+            await asyncio.sleep(1)
+            url_atual = page.url
+            if "hub/summary" in url_atual or "product-ads" in url_atual:
+                break
+
+        url_atual = page.url
+        logger.info(f"URL apos aguardar SPA: {url_atual}")
+
+        # Tentar extrair advertiserId da URL atual
+        advertiser_id = _extrair_advertiser_id(url_atual)
+
+        if not advertiser_id:
+            # Tentar extrair de links na pagina
+            advertiser_id = await page.evaluate("""() => {
+                const patterns = [/[?&]advertiserId=(\\d+)/i, /[?&]advertiser_id=(\\d+)/i];
+                // Da URL atual
+                for (const p of patterns) {
+                    const m = location.href.match(p);
+                    if (m) return m[1];
+                }
+                // De qualquer link na pagina
+                const links = Array.from(document.querySelectorAll('a[href]'));
+                for (const a of links) {
+                    for (const p of patterns) {
+                        const m = a.href.match(p);
+                        if (m) return m[1];
+                    }
+                }
+                return null;
+            }""")
+
+        if advertiser_id:
+            campaigns_url = (
+                f"https://ads.mercadolivre.com.br/product-ads/admin/campaigns"
+                f"?fe-rollout-version=v2&advertiser_id={advertiser_id}"
+                f"&navigate_to=mercado_ads&from=ads-manager&status=A%2CD"
+            )
+            logger.info(f"advertiserId={advertiser_id} — navegando para campanhas")
+            await page.goto(campaigns_url, wait_until="networkidle", timeout=30000)
+            await asyncio.sleep(2)
             await _aguardar_campanhas_carregar(page)
+            logger.info(f"URL final: {page.url}")
             return True
 
-        # Aguardar SPA carregar (ate 8s)
-        await asyncio.sleep(4)
-
-        logger.info(f"Na pagina: {page.url} — buscando link 'Ir para Product Ads'")
-
-        # Log diagnostico: listar todos os hrefs com 'ads' ou 'product' na pagina
+        # Ultimo fallback: procurar link 'Product Ads' no DOM
         todos_links = await page.evaluate("""() => {
             return Array.from(document.querySelectorAll('a[href]')).map(a => ({
                 txt: (a.innerText || a.textContent || '').trim().substring(0, 60),
@@ -71,42 +112,45 @@ async def navegar_para_campanhas(page) -> bool:
             })).filter(x => x.href && (
                 x.href.includes('product') || x.href.includes('ads') ||
                 x.txt.toLowerCase().includes('product') || x.txt.toLowerCase().includes('ads')
-            )).slice(0, 10);
+            )).slice(0, 15);
         }""")
-        logger.info(f"Links encontrados na pagina: {todos_links}")
+        logger.info(f"Links na pagina: {todos_links}")
 
-        # Pegar o href do link "Ir para Product Ads"
         href = await page.evaluate("""() => {
             const links = Array.from(document.querySelectorAll('a[href]'));
             for (const a of links) {
                 const txt = (a.innerText || a.textContent || '').trim();
-                if (txt.includes('Product Ads')) {
-                    return a.href;
-                }
+                if (txt.includes('Product Ads')) return a.href;
             }
-            // Fallback: qualquer link com 'product-ads' no href
             for (const a of links) {
-                if (a.href && a.href.includes('product-ads')) {
-                    return a.href;
-                }
+                if (a.href && a.href.includes('product-ads')) return a.href;
             }
             return null;
         }""")
 
         if href:
-            logger.info(f"Link encontrado: {href}")
+            logger.info(f"Link Product Ads encontrado: {href}")
             await page.goto(href, wait_until="networkidle", timeout=30000)
             await asyncio.sleep(2)
             await _aguardar_campanhas_carregar(page)
-            logger.info(f"Navegou para: {page.url}")
             return True
 
-        logger.warning(f"Link 'Ir para Product Ads' nao encontrado. URL atual: {page.url}")
+        logger.warning(f"Falha ao navegar para campanhas. URL final: {page.url}")
         return False
 
     except Exception as e:
         logger.error(f"Erro ao navegar para campanhas: {e}")
         return False
+
+
+def _extrair_advertiser_id(url: str) -> Optional[str]:
+    """Extrai advertiserId de URLs do ML Ads."""
+    import re
+    for pattern in [r'[?&]advertiserId=(\d+)', r'[?&]advertiser_id=(\d+)']:
+        m = re.search(pattern, url)
+        if m:
+            return m.group(1)
+    return None
 
 
 async def _aguardar_campanhas_carregar(page, timeout_s: int = 15):

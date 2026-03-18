@@ -343,13 +343,14 @@ class StateManager:
         return estado.get("acoes_hoje", 0)
 
     def acoes_ultima_hora(self, conta_id: int) -> int:
-        """Conta acoes na ultima hora."""
+        """Conta acoes bem-sucedidas na ultima hora (ignora falhas/canceladas)."""
         uma_hora_atras = datetime.now() - timedelta(hours=1)
         changelog = self.carregar_changelog()
         return sum(
             1 for r in changelog
             if r.get("conta_id") == conta_id
             and datetime.fromisoformat(r["timestamp"]) >= uma_hora_atras
+            and r.get("status", "sucesso") in ("sucesso", "simulado", "SUCESSO", "SIMULADO")
         )
 
     def resumo_contas(self) -> dict:
