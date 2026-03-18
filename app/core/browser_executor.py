@@ -176,6 +176,127 @@ class BrowserExecutor:
             inicio,
         )
 
+    # ==================== BATCH TOGGLE (pausar/ativar em lote) ====================
+
+    async def executar_batch_toggle(
+        self, acoes: list, conta_id: int
+    ) -> list:
+        """
+        Executa multiplas acoes de pausar/ativar em uma unica varredura de paginas.
+        Muito mais eficiente que executar uma por uma.
+
+        Returns:
+            Lista de AcaoExecutada na mesma ordem das acoes de entrada.
+        """
+        import time as _time
+
+        inicio = _time.time()
+        resultados_map = {}
+
+        sessao = await self.session_pool.obter_sessao(conta_id)
+        if not sessao or not sessao.esta_ativa():
+            return [
+                self._resultado_erro(a, "Sessao browser indisponivel", inicio)
+                for a in acoes
+            ]
+
+        page = sessao.page
+        human = HumanBehavior(page)
+
+        # Navegar para lista de campanhas
+        if not await navigator.navegar_para_campanhas(page):
+            if not await navigator.tratar_redirect_login(page, sessao):
+                return [
+                    self._resultado_erro(a, "Falha ao navegar para campanhas (login expirado)", inicio)
+                    for a in acoes
+                ]
+            if not await navigator.navegar_para_campanhas(page):
+                return [
+                    self._resultado_erro(a, "Falha ao navegar para campanhas apos re-login", inicio)
+                    for a in acoes
+                ]
+
+        # Dry-run
+        if self.dry_run:
+            screenshot = await navigator.screenshot_acao(
+                page, f"dryrun_batch_{conta_id}", self.config.screenshot_dir
+            )
+            return [
+                AcaoExecutada(
+                    action_id=a.action_id,
+                    status=StatusAcao.SIMULADA,
+                    detalhes=f"[DRY-RUN] batch_toggle simulado",
+                    screenshot_path=screenshot,
+                    duration_seconds=_time.time() - inicio,
+                )
+                for a in acoes
+            ]
+
+        # Separar por tipo (pausar vs ativar)
+        from app.models import TipoAcao
+        pausar_names = {
+            a.target.campaign_name: a
+            for a in acoes
+            if a.tipo_acao == TipoAcao.PAUSAR_CAMPANHA and a.target.campaign_name
+        }
+        ativar_names = {
+            a.target.campaign_name: a
+            for a in acoes
+            if a.tipo_acao == TipoAcao.ATIVAR_CAMPANHA and a.target.campaign_name
+        }
+
+        # Executar pausar em lote
+        if pausar_names:
+            res_pausar = await navigator.varrer_paginas_e_processar(
+                page, human, set(pausar_names.keys()), pausar=True
+            )
+            for nome, ok in res_pausar.items():
+                acao_orig = pausar_names[nome]
+                resultados_map[acao_orig.action_id] = AcaoExecutada(
+                    action_id=acao_orig.action_id,
+                    status=StatusAcao.SUCESSO if ok else StatusAcao.ERRO,
+                    detalhes=f"Campanha '{nome}' pausada com sucesso" if ok else f"Campanha '{nome}' nao encontrada ou falhou",
+                    duration_seconds=_time.time() - inicio,
+                )
+
+        # Voltar a pagina 1 antes de ativar (se necessario)
+        if ativar_names:
+            await navigator.navegar_para_campanhas(page)
+            res_ativar = await navigator.varrer_paginas_e_processar(
+                page, human, set(ativar_names.keys()), pausar=False
+            )
+            for nome, ok in res_ativar.items():
+                acao_orig = ativar_names[nome]
+                resultados_map[acao_orig.action_id] = AcaoExecutada(
+                    action_id=acao_orig.action_id,
+                    status=StatusAcao.SUCESSO if ok else StatusAcao.ERRO,
+                    detalhes=f"Campanha '{nome}' ativada com sucesso" if ok else f"Campanha '{nome}' nao encontrada ou falhou",
+                    duration_seconds=_time.time() - inicio,
+                )
+
+        # Screenshot final
+        screenshot = await navigator.screenshot_acao(
+            page, f"batch_toggle_{conta_id}", self.config.screenshot_dir
+        )
+
+        # Montar lista de resultados na ordem original
+        resultado_final = []
+        for acao in acoes:
+            if acao.action_id in resultados_map:
+                r = resultados_map[acao.action_id]
+                r.screenshot_path = screenshot
+                resultado_final.append(r)
+            else:
+                resultado_final.append(
+                    self._resultado_erro(acao, "Nome de campanha nao informado", inicio)
+                )
+
+        logger.info(
+            f"Batch toggle concluido: {sum(1 for r in resultado_final if r.status == StatusAcao.SUCESSO)}"
+            f"/{len(resultado_final)} sucessos"
+        )
+        return resultado_final
+
     # ==================== ACAO 1: PAUSAR CAMPANHA ====================
 
     async def _pausar_campanha(

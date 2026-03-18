@@ -7,13 +7,14 @@ Usado pelo browser_executor para encontrar e interagir com campanhas/anuncios.
 
 import asyncio
 import logging
+import random
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 # URLs do painel ML Ads
-ML_ADS_HOME = "https://www.mercadolivre.com.br/publicidade"
-ML_ADS_CAMPAIGNS = "https://www.mercadolivre.com.br/publicidade/campanhas"
+ML_ADS_HOME = "https://ads.mercadolivre.com.br/"
+ML_ADS_CAMPAIGNS = "https://ads.mercadolivre.com.br/"
 ML_LOGIN = "https://www.mercadolivre.com.br/jms/mlb/lgz/login"
 
 
@@ -42,20 +43,247 @@ async def navegar_para_ads(page) -> bool:
 
 
 async def navegar_para_campanhas(page) -> bool:
-    """Navega para a lista de campanhas."""
+    """Navega para a lista de campanhas de Product Ads."""
     try:
-        await page.goto(ML_ADS_CAMPAIGNS, wait_until="networkidle", timeout=30000)
+        await page.goto(ML_ADS_HOME, wait_until="networkidle", timeout=30000)
         await aguardar_carregamento(page)
 
         if await _detectar_login_redirect(page):
             return False
 
-        logger.info("Navegou para lista de campanhas")
-        return True
+        # Se ja esta na pagina de campanhas, ok
+        if "product-ads" in page.url or "/campaigns" in page.url:
+            logger.info("Ja esta na pagina de Product Ads")
+            return True
+
+        # Clicar no link "Ir para Product Ads"
+        seletores_link = [
+            "a:text('Ir para Product Ads')",
+            "a:text-matches('Product Ads', 'i')",
+            "a[href*='product-ads']",
+            "a[href*='product_ads']",
+        ]
+        for sel in seletores_link:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    await el.click()
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                    await aguardar_carregamento(page)
+                    logger.info("Clicou em 'Ir para Product Ads'")
+                    return True
+            except Exception:
+                continue
+
+        # Fallback: buscar pelo texto via JS
+        try:
+            clicou = await page.evaluate("""() => {
+                const links = document.querySelectorAll('a');
+                for (const a of links) {
+                    if (a.innerText && a.innerText.includes('Product Ads')) {
+                        a.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if clicou:
+                await page.wait_for_load_state("networkidle", timeout=15000)
+                await aguardar_carregamento(page)
+                logger.info("Clicou em 'Ir para Product Ads' via JS")
+                return True
+        except Exception:
+            pass
+
+        # Ultima tentativa: navegar direto para product-ads
+        try:
+            await page.goto(
+                "https://ads.mercadolivre.com.br/product-ads/campaigns",
+                wait_until="networkidle",
+                timeout=30000,
+            )
+            await aguardar_carregamento(page)
+            if not await _detectar_login_redirect(page):
+                logger.info("Navegou direto para product-ads/campaigns")
+                return True
+        except Exception:
+            pass
+
+        logger.warning("Nao conseguiu navegar para lista de campanhas")
+        return False
 
     except Exception as e:
         logger.error(f"Erro ao navegar para campanhas: {e}")
         return False
+
+
+async def varrer_paginas_e_processar(page, human, nomes_alvo: set, pausar: bool, max_paginas: int = 50) -> dict:
+    """
+    Abre lista de campanhas, vai pagina por pagina.
+    Em cada pagina, verifica quais campanhas estao na lista alvo e pausa/ativa.
+    Retorna {nome: True/False} com resultado de cada uma.
+
+    Esse e o modo eficiente: uma unica passagem por todas as paginas,
+    processando todos os matches de uma vez (como um humano faria com planilha).
+    """
+    resultados = {}
+    restantes = set(nomes_alvo)
+    verbo = "pausar" if pausar else "ativar"
+
+    for pagina in range(max_paginas):
+        if not restantes:
+            break
+
+        await asyncio.sleep(0.8)
+
+        # JS: coleta todos os pares (texto, elementoLinha) visíveis na página
+        dados_pagina = await page.evaluate("""() => {
+            const linhas = [];
+            const candidatos = document.querySelectorAll(
+                'tr, [role="row"], [class*="row"], [class*="campaign"], li'
+            );
+            for (const el of candidatos) {
+                const txt = el.innerText || '';
+                if (txt.trim().length > 0 && txt.trim().length < 500) {
+                    linhas.push(txt.trim());
+                }
+            }
+            return linhas;
+        }""")
+
+        # Verificar quais nomes da lista aparecem nessa página
+        matches_pagina = []
+        for texto in dados_pagina:
+            for nome in list(restantes):
+                if nome in texto:
+                    matches_pagina.append(nome)
+                    break
+
+        if matches_pagina:
+            logger.info(f"Pagina {pagina+1}: encontradas {len(matches_pagina)} campanhas — {matches_pagina}")
+
+        # Para cada match, encontrar o elemento e clicar no toggle
+        for nome in matches_pagina:
+            try:
+                handle = await page.evaluate_handle("""(nome) => {
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    let node;
+                    while ((node = walker.nextNode())) {
+                        if (node.textContent.includes(nome)) {
+                            let el = node.parentElement;
+                            for (let i = 0; i < 12; i++) {
+                                if (!el) break;
+                                const tag = el.tagName;
+                                const role = el.getAttribute('role') || '';
+                                const cls = el.className || '';
+                                if (tag === 'TR' || role === 'row' || role === 'listitem' ||
+                                    cls.includes('row') || cls.includes('item') || cls.includes('campaign')) {
+                                    return el;
+                                }
+                                el = el.parentElement;
+                            }
+                            return node.parentElement;
+                        }
+                    }
+                    return null;
+                }""", nome)
+
+                linha = handle.as_element() if handle else None
+                if not linha:
+                    continue
+
+                # Encontrar toggle na linha
+                toggle = await _encontrar_toggle(linha)
+                if not toggle:
+                    logger.warning(f"Toggle nao encontrado para '{nome}'")
+                    resultados[nome] = False
+                    continue
+
+                # Verificar estado atual e clicar se necessário
+                esta_ativo = await _toggle_ativo(toggle)
+                if pausar and not esta_ativo:
+                    logger.info(f"'{nome}' ja esta pausada")
+                    resultados[nome] = True
+                    restantes.discard(nome)
+                    continue
+                if not pausar and esta_ativo:
+                    logger.info(f"'{nome}' ja esta ativa")
+                    resultados[nome] = True
+                    restantes.discard(nome)
+                    continue
+
+                await human.clicar_elemento(toggle)
+                await asyncio.sleep(random.uniform(3, 5))
+
+                # Confirmar dialog se aparecer
+                await _confirmar_dialog_nav(page, human)
+                await asyncio.sleep(0.5)
+
+                logger.info(f"Campanha '{nome}' {verbo} com sucesso")
+                resultados[nome] = True
+                restantes.discard(nome)
+
+            except Exception as e:
+                logger.error(f"Erro ao {verbo} '{nome}': {e}")
+                resultados[nome] = False
+
+        # Próxima página
+        foi = await _ir_proxima_pagina(page)
+        if not foi:
+            logger.info(f"Ultima pagina ({pagina+1}). Restantes nao encontradas: {restantes}")
+            break
+
+    # Marcar restantes como não encontradas
+    for nome in restantes:
+        if nome not in resultados:
+            resultados[nome] = False
+
+    return resultados
+
+
+async def _encontrar_toggle(linha) -> Optional[object]:
+    seletores = [
+        ".andes-switch", "input[type='checkbox'][role='switch']",
+        ".andes-switch__trigger", "button[role='switch']",
+        "input[type='checkbox']", "[class*='toggle']", "[class*='switch']",
+    ]
+    for sel in seletores:
+        try:
+            el = await linha.query_selector(sel)
+            if el:
+                return el
+        except Exception:
+            continue
+    return None
+
+
+async def _toggle_ativo(toggle) -> bool:
+    try:
+        for attr in ["checked", "aria-checked"]:
+            val = await toggle.get_attribute(attr)
+            if val is not None:
+                return val not in ("false", "0", "")
+        cls = await toggle.get_attribute("class") or ""
+        return any(x in cls for x in ["active", "checked", "on", "selected"])
+    except Exception:
+        return False
+
+
+async def _confirmar_dialog_nav(page, human) -> None:
+    try:
+        seletores = [
+            "button[class*='confirm']", "button[class*='primary']",
+            ".andes-modal button", "button:has-text('Confirmar')",
+            "button:has-text('Pausar')", "button:has-text('OK')",
+        ]
+        for sel in seletores:
+            btn = await page.query_selector(sel)
+            if btn:
+                await human.clicar_elemento(btn)
+                await asyncio.sleep(0.5)
+                return
+    except Exception:
+        pass
 
 
 async def buscar_campanha_por_nome(page, nome: str, max_paginas: int = 30) -> Optional[object]:

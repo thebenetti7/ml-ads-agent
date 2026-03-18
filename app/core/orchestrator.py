@@ -193,14 +193,73 @@ class Orchestrator:
         # Ordenar por prioridade
         acoes.sort(key=lambda a: a.prioridade_ordem)
 
+        # Separar acoes de toggle (pausar/ativar) das demais para processamento em lote
+        _TOGGLE_TIPOS = {
+            "pausar_campanha", "ativar_campanha",
+            "PAUSAR_CAMPANHA", "ATIVAR_CAMPANHA",
+        }
+        toggle_acoes = []
+        outras_acoes = []
+        for a in acoes:
+            tipo_str = a.action_type if isinstance(a.action_type, str) else a.action_type.value
+            if tipo_str.lower() in ("pausar_campanha", "ativar_campanha"):
+                toggle_acoes.append(a)
+            else:
+                outras_acoes.append(a)
+
         acoes_executadas = 0
-        for acao in acoes:
+
+        # 1. Executar toggles em lote (uma unica varredura de paginas)
+        if toggle_acoes and not self.shutdown_event.is_set():
+            # Filtrar pelo guardrail
+            toggle_ok = []
+            for acao in toggle_acoes:
+                ok, motivo = self.guardrails.pode_executar(
+                    tipo_acao=acao.action_type.lower() if isinstance(acao.action_type, str) else acao.action_type.value.lower(),
+                    conta_id=conta_id,
+                    params=acao.params,
+                )
+                if not ok:
+                    logger.info(f"Acao {acao.action_id} bloqueada: {motivo}")
+                    await self.vps_client.reportar_acao(AcaoExecutada(
+                        action_id=acao.action_id,
+                        status=StatusAcao.CANCELADA,
+                        detalhes=f"Bloqueada por guardrail: {motivo}",
+                    ))
+                else:
+                    toggle_ok.append(acao)
+
+            if toggle_ok:
+                logger.info(f"Executando {len(toggle_ok)} acoes de toggle em lote")
+                inicio = datetime.now()
+                resultados_batch = await self.browser_executor.executar_batch_toggle(
+                    toggle_ok, conta_id
+                )
+                duracao_total = (datetime.now() - inicio).total_seconds()
+
+                for acao, resultado in zip(toggle_ok, resultados_batch):
+                    resultado.duration_seconds = resultado.duration_seconds or duracao_total / len(toggle_ok)
+                    await self.vps_client.reportar_acao(resultado)
+                    self.state_manager.registrar_acao(
+                        conta_id=conta_id,
+                        action_id=acao.action_id,
+                        rule_id=acao.regra_origem,
+                        action_type=acao.action_type if isinstance(acao.action_type, str) else acao.action_type.value,
+                        campaign_id=acao.target.campaign_id or "",
+                        campaign_name=acao.target.campaign_name or "",
+                        params=acao.params,
+                        status=resultado.status.value,
+                        duration_ms=int((resultado.duration_seconds or 0) * 1000),
+                    )
+                    acoes_executadas += 1
+
+        # 2. Executar demais acoes individualmente
+        for acao in outras_acoes:
             if self.shutdown_event.is_set():
                 break
 
-            # Validar via guardrails
             ok, motivo = self.guardrails.pode_executar(
-                tipo_acao=acao.action_type.lower(),
+                tipo_acao=acao.action_type.lower() if isinstance(acao.action_type, str) else acao.action_type.value.lower(),
                 conta_id=conta_id,
                 params=acao.params,
             )
@@ -214,21 +273,18 @@ class Orchestrator:
                 ))
                 continue
 
-            # Executar
             inicio = datetime.now()
             resultado = await self._executar_acao(conta_id, acao)
             duracao = (datetime.now() - inicio).total_seconds()
 
-            # Reportar resultado
             resultado.duration_seconds = duracao
             await self.vps_client.reportar_acao(resultado)
 
-            # Registrar no state
             self.state_manager.registrar_acao(
                 conta_id=conta_id,
                 action_id=acao.action_id,
                 rule_id=acao.regra_origem,
-                action_type=acao.action_type,
+                action_type=acao.action_type if isinstance(acao.action_type, str) else acao.action_type.value,
                 campaign_id=acao.target.campaign_id or "",
                 campaign_name=acao.target.campaign_name or "",
                 params=acao.params,
@@ -238,7 +294,6 @@ class Orchestrator:
 
             acoes_executadas += 1
 
-            # Delay entre acoes
             delay_ms = random.randint(
                 self.config.entre_acoes_min_ms,
                 self.config.entre_acoes_max_ms,
