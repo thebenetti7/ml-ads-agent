@@ -73,8 +73,11 @@ class MLSessionManager:
         """Inicia via Camoufox (anti-detect Firefox)."""
         try:
             from camoufox.async_api import AsyncNewBrowser
+            from playwright.async_api import async_playwright
 
+            self._playwright = await async_playwright().start()
             self.browser = await AsyncNewBrowser(
+                self._playwright,
                 headless=self.headless,
                 geoip=True,
             )
