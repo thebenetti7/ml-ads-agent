@@ -203,14 +203,14 @@ class BrowserExecutor:
         page = sessao.page
         human = HumanBehavior(page)
 
-        # Navegar para lista de campanhas
-        if not await navigator.navegar_para_campanhas(page):
+        # Navegar para lista de campanhas (passar conta_id para usar advertiser_id direto)
+        if not await navigator.navegar_para_campanhas(page, conta_id=conta_id):
             if not await navigator.tratar_redirect_login(page, sessao):
                 return [
                     self._resultado_erro(a, "Falha ao navegar para campanhas (login expirado)", inicio)
                     for a in acoes
                 ]
-            if not await navigator.navegar_para_campanhas(page):
+            if not await navigator.navegar_para_campanhas(page, conta_id=conta_id):
                 return [
                     self._resultado_erro(a, "Falha ao navegar para campanhas apos re-login", inicio)
                     for a in acoes
@@ -261,7 +261,7 @@ class BrowserExecutor:
 
         # Voltar a pagina 1 antes de ativar (se necessario)
         if ativar_names:
-            await navigator.navegar_para_campanhas(page)
+            await navigator.navegar_para_campanhas(page, conta_id=conta_id)
             res_ativar = await navigator.varrer_paginas_e_processar(
                 page, human, set(ativar_names.keys()), pausar=False
             )
