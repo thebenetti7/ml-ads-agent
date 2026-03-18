@@ -265,10 +265,14 @@ async def varrer_paginas_e_processar(page, human, nomes_alvo: set, pausar: bool,
 
 
 async def _encontrar_toggle(linha) -> Optional[object]:
+    # Seletor real: input[data-testid="switch-status"] dentro da linha
     seletores = [
-        ".andes-switch", "input[type='checkbox'][role='switch']",
-        ".andes-switch__trigger", "button[role='switch']",
-        "input[type='checkbox']", "[class*='toggle']", "[class*='switch']",
+        "input[data-testid='switch-status']",
+        "input.andes-switch__input[role='switch']",
+        "label.campaign-status-switch input",
+        "label.andes-switch input",
+        "input[role='switch']",
+        ".andes-switch__input",
     ]
     for sel in seletores:
         try:
@@ -282,12 +286,13 @@ async def _encontrar_toggle(linha) -> Optional[object]:
 
 async def _toggle_ativo(toggle) -> bool:
     try:
-        for attr in ["checked", "aria-checked"]:
-            val = await toggle.get_attribute(attr)
-            if val is not None:
-                return val not in ("false", "0", "")
-        cls = await toggle.get_attribute("class") or ""
-        return any(x in cls for x in ["active", "checked", "on", "selected"])
+        # O input tem checked="" quando ativo, ausente quando pausado
+        checked = await toggle.get_attribute("checked")
+        if checked is not None:
+            return True  # atributo presente = ativo
+        # Verificar via propriedade JS
+        is_checked = await toggle.evaluate("el => el.checked")
+        return bool(is_checked)
     except Exception:
         return False
 
@@ -357,14 +362,29 @@ async def buscar_campanha_por_nome(page, nome: str, max_paginas: int = 30) -> Op
 
 
 async def _ir_proxima_pagina(page) -> bool:
-    """Clica no botao de proxima pagina. Retorna False se nao existe."""
+    """Clica no botao 'Seguinte' da paginacao. Retorna False se nao existe ou esta desabilitado."""
+    try:
+        # Seletor real: <a class="andes-pagination__link">Seguinte</a>
+        btn = await page.evaluate_handle("""() => {
+            const links = Array.from(document.querySelectorAll('a.andes-pagination__link'));
+            return links.find(a => (a.innerText || '').trim() === 'Seguinte') || null;
+        }""")
+        el = btn.as_element() if btn else None
+        if el:
+            disabled = await el.get_attribute("disabled")
+            aria_disabled = await el.get_attribute("aria-disabled")
+            if disabled is not None or aria_disabled == "true":
+                return False
+            await el.click()
+            await asyncio.sleep(1.5)
+            return True
+    except Exception:
+        pass
+
+    # Fallbacks adicionais
     seletores_proximo = [
         "button[aria-label*='próxima' i]",
         "button[aria-label*='next' i]",
-        "a[aria-label*='próxima' i]",
-        "a[aria-label*='next' i]",
-        "[class*='pagination'] button:last-child",
-        "[class*='pagination'] li:last-child a",
         ".andes-pagination__button--next",
         "button[data-testid*='next']",
     ]
@@ -375,11 +395,8 @@ async def _ir_proxima_pagina(page) -> bool:
                 disabled = await btn.get_attribute("disabled")
                 if disabled is not None:
                     return False
-                aria_disabled = await btn.get_attribute("aria-disabled")
-                if aria_disabled == "true":
-                    return False
                 await btn.click()
-                await asyncio.sleep(1.2)
+                await asyncio.sleep(1.5)
                 return True
         except Exception:
             continue
