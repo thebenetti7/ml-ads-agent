@@ -12,8 +12,8 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # URLs do painel ML Ads
-ML_ADS_HOME = "https://www.mercadolivre.com.br/advertising/home"
-ML_ADS_CAMPAIGNS = "https://www.mercadolivre.com.br/advertising/product-ads/campaigns"
+ML_ADS_HOME = "https://www.mercadolivre.com.br/publicidade"
+ML_ADS_CAMPAIGNS = "https://www.mercadolivre.com.br/publicidade/campanhas"
 ML_LOGIN = "https://www.mercadolivre.com.br/jms/mlb/lgz/login"
 
 
@@ -58,36 +58,81 @@ async def navegar_para_campanhas(page) -> bool:
         return False
 
 
-async def buscar_campanha_por_nome(page, nome: str, max_scroll: int = 5) -> Optional[object]:
+async def buscar_campanha_por_nome(page, nome: str, max_paginas: int = 30) -> Optional[object]:
     """
-    Busca uma campanha na lista pelo nome.
-    Faz scroll progressivo se necessario.
-
-    Args:
-        page: pagina Playwright
-        nome: nome (ou parte) da campanha
-        max_scroll: maximo de scrolls para buscar
-
-    Returns:
-        Elemento da campanha ou None
+    Busca uma campanha pelo nome passando pagina por pagina.
+    Usa JS puro para varrer o DOM sem depender de seletores.
     """
-    for tentativa in range(max_scroll):
-        # Buscar todas as linhas de campanha visiveis
-        # Seletores serao definidos em selectors.py (Fase 3)
-        linhas = await page.query_selector_all("[data-testid='campaign-row'], .campaign-row, tr[class*='campaign']")
+    for pagina in range(max_paginas):
+        await asyncio.sleep(0.8)
 
-        for linha in linhas:
-            texto = await linha.inner_text()
-            if nome.lower() in texto.lower():
-                logger.info(f"Campanha encontrada: {nome}")
-                return linha
+        # JS: varre todos os nos de texto e sobe ate encontrar uma "linha"
+        handle = await page.evaluate_handle("""(nome) => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode())) {
+                if (node.textContent.trim() === nome || node.textContent.includes(nome)) {
+                    let el = node.parentElement;
+                    for (let i = 0; i < 12; i++) {
+                        if (!el) break;
+                        const tag = el.tagName;
+                        const role = el.getAttribute('role') || '';
+                        const cls = el.className || '';
+                        if (tag === 'TR' || role === 'row' || role === 'listitem' ||
+                            cls.includes('row') || cls.includes('item') || cls.includes('campaign')) {
+                            return el;
+                        }
+                        el = el.parentElement;
+                    }
+                    return node.parentElement;
+                }
+            }
+            return null;
+        }""", nome)
 
-        # Scroll para baixo para carregar mais
-        await page.evaluate("window.scrollBy(0, 500)")
-        await asyncio.sleep(0.5)
+        if handle:
+            el = handle.as_element()
+            if el:
+                logger.info(f"Campanha '{nome}' encontrada na pagina {pagina + 1}")
+                return el
 
-    logger.warning(f"Campanha nao encontrada: {nome}")
+        # Tentar ir para proxima pagina
+        foi = await _ir_proxima_pagina(page)
+        if not foi:
+            break
+
+    logger.warning(f"Campanha '{nome}' nao encontrada em {max_paginas} paginas")
     return None
+
+
+async def _ir_proxima_pagina(page) -> bool:
+    """Clica no botao de proxima pagina. Retorna False se nao existe."""
+    seletores_proximo = [
+        "button[aria-label*='próxima' i]",
+        "button[aria-label*='next' i]",
+        "a[aria-label*='próxima' i]",
+        "a[aria-label*='next' i]",
+        "[class*='pagination'] button:last-child",
+        "[class*='pagination'] li:last-child a",
+        ".andes-pagination__button--next",
+        "button[data-testid*='next']",
+    ]
+    for sel in seletores_proximo:
+        try:
+            btn = await page.query_selector(sel)
+            if btn:
+                disabled = await btn.get_attribute("disabled")
+                if disabled is not None:
+                    return False
+                aria_disabled = await btn.get_attribute("aria-disabled")
+                if aria_disabled == "true":
+                    return False
+                await btn.click()
+                await asyncio.sleep(1.2)
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def navegar_para_config_campanha(page, campaign_name: str) -> bool:
