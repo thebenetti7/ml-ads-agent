@@ -13,10 +13,16 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # URLs do painel ML Ads
-# IMPORTANTE: partir de advertising/home no dominio principal (onde o browser esta logado)
-# Esse URL faz SSO e redireciona para ads.mercadolivre.com.br autenticado
-ML_ADS_HOME = "https://www.mercadolivre.com.br/advertising/home"
+ML_ADS_HOME = "https://ads.mercadolivre.com.br/"
+ML_ADS_HUB = "https://ads.mercadolivre.com.br/hub/summary"
 ML_LOGIN = "https://www.mercadolivre.com.br/jms/mlb/lgz/login"
+
+# advertiser_id por conta (ML user_id → advertiser_id no painel de ads)
+_ADVERTISER_IDS = {
+    673355109: "40981",
+    # 778944463: "???",   # descobrir na primeira execucao
+    # 2295471566: "???",  # descobrir na primeira execucao
+}
 
 
 async def navegar_para_ads(page) -> bool:
@@ -43,8 +49,11 @@ async def navegar_para_ads(page) -> bool:
         return False
 
 
-async def navegar_para_campanhas(page) -> bool:
-    """Navega para a lista de campanhas de Product Ads."""
+async def navegar_para_campanhas(page, conta_id: int = None) -> bool:
+    """
+    Navega para a lista de campanhas de Product Ads.
+    Se conta_id for informado e tiver advertiser_id mapeado, vai direto para a URL.
+    """
     try:
         # Se ja esta na pagina de campanhas, nao precisa navegar
         url_atual = page.url.lower()
@@ -53,35 +62,43 @@ async def navegar_para_campanhas(page) -> bool:
             await _aguardar_campanhas_carregar(page)
             return True
 
-        # Navegar para home do ML Ads (SPA vai redirecionar para hub/summary?advertiserId=X)
-        await page.goto(ML_ADS_HOME, wait_until="networkidle", timeout=30000)
+        # --- CAMINHO 1: advertiser_id conhecido — vai direto ---
+        advertiser_id = _ADVERTISER_IDS.get(conta_id) if conta_id else None
+        if advertiser_id:
+            return await _navegar_direto_campanhas(page, advertiser_id)
+
+        # --- CAMINHO 2: descoberta via SPA ---
+        # Navegar para hub do ads (requer cookie de sessao valido em ads.mercadolivre.com.br)
+        await page.goto(ML_ADS_HUB, wait_until="networkidle", timeout=30000)
+        await asyncio.sleep(3)
 
         if await _detectar_login_redirect(page):
             return False
 
-        # Aguardar o SPA redirecionar para hub/summary (ate 20s)
-        for _ in range(20):
+        # Aguardar redirect para hub/summary?advertiserId=X (ate 15s)
+        for _ in range(15):
             await asyncio.sleep(1)
             url_atual = page.url
             if "hub/summary" in url_atual or "product-ads" in url_atual:
                 break
 
         url_atual = page.url
-        logger.info(f"URL apos aguardar SPA: {url_atual}")
+        logger.info(f"URL apos hub/summary: {url_atual}")
 
-        # Tentar extrair advertiserId da URL atual
+        # Checar se ainda esta na landing page (nao autenticado)
+        if "hub/summary" not in url_atual and "product-ads" not in url_atual:
+            logger.warning(f"Nao autenticado em ads.mercadolivre.com.br. URL: {url_atual}")
+            return False
+
+        # Extrair advertiserId e ir para campanhas
         advertiser_id = _extrair_advertiser_id(url_atual)
-
         if not advertiser_id:
-            # Tentar extrair de links na pagina
             advertiser_id = await page.evaluate("""() => {
                 const patterns = [/[?&]advertiserId=(\\d+)/i, /[?&]advertiser_id=(\\d+)/i];
-                // Da URL atual
                 for (const p of patterns) {
                     const m = location.href.match(p);
                     if (m) return m[1];
                 }
-                // De qualquer link na pagina
                 const links = Array.from(document.querySelectorAll('a[href]'));
                 for (const a of links) {
                     for (const p of patterns) {
@@ -93,55 +110,39 @@ async def navegar_para_campanhas(page) -> bool:
             }""")
 
         if advertiser_id:
-            campaigns_url = (
-                f"https://ads.mercadolivre.com.br/product-ads/admin/campaigns"
-                f"?fe-rollout-version=v2&advertiser_id={advertiser_id}"
-                f"&navigate_to=mercado_ads&from=ads-manager&status=A%2CD"
-            )
-            logger.info(f"advertiserId={advertiser_id} — navegando para campanhas")
-            await page.goto(campaigns_url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
-            await _aguardar_campanhas_carregar(page)
-            logger.info(f"URL final: {page.url}")
-            return True
+            return await _navegar_direto_campanhas(page, advertiser_id)
 
-        # Ultimo fallback: procurar link 'Product Ads' no DOM
-        todos_links = await page.evaluate("""() => {
-            return Array.from(document.querySelectorAll('a[href]')).map(a => ({
-                txt: (a.innerText || a.textContent || '').trim().substring(0, 60),
-                href: a.href,
-            })).filter(x => x.href && (
-                x.href.includes('product') || x.href.includes('ads') ||
-                x.txt.toLowerCase().includes('product') || x.txt.toLowerCase().includes('ads')
-            )).slice(0, 15);
-        }""")
-        logger.info(f"Links na pagina: {todos_links}")
-
-        href = await page.evaluate("""() => {
-            const links = Array.from(document.querySelectorAll('a[href]'));
-            for (const a of links) {
-                const txt = (a.innerText || a.textContent || '').trim();
-                if (txt.includes('Product Ads')) return a.href;
-            }
-            for (const a of links) {
-                if (a.href && a.href.includes('product-ads')) return a.href;
-            }
-            return null;
-        }""")
-
-        if href:
-            logger.info(f"Link Product Ads encontrado: {href}")
-            await page.goto(href, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
-            await _aguardar_campanhas_carregar(page)
-            return True
-
-        logger.warning(f"Falha ao navegar para campanhas. URL final: {page.url}")
+        logger.warning(f"Nao foi possivel descobrir advertiserId. URL: {page.url}")
         return False
 
     except Exception as e:
         logger.error(f"Erro ao navegar para campanhas: {e}")
         return False
+
+
+async def _navegar_direto_campanhas(page, advertiser_id: str) -> bool:
+    """Vai direto para a lista de campanhas com advertiserId conhecido."""
+    campaigns_url = (
+        f"https://ads.mercadolivre.com.br/product-ads/admin/campaigns"
+        f"?fe-rollout-version=v2&advertiser_id={advertiser_id}"
+        f"&navigate_to=mercado_ads&from=ads-manager&status=A%2CD"
+    )
+    logger.info(f"Navegando direto para campanhas (advertiserId={advertiser_id})")
+    await page.goto(campaigns_url, wait_until="networkidle", timeout=30000)
+    await asyncio.sleep(2)
+
+    url_atual = page.url
+    logger.info(f"URL apos goto campanhas: {url_atual}")
+
+    # Se redirecionou para login ou landing page, falhou
+    if await _detectar_login_redirect(page):
+        return False
+    if "product-ads" not in url_atual.lower() and "hub" not in url_atual.lower():
+        logger.warning(f"Nao chegou na pagina de campanhas. URL: {url_atual}")
+        return False
+
+    await _aguardar_campanhas_carregar(page)
+    return True
 
 
 def _extrair_advertiser_id(url: str) -> Optional[str]:
