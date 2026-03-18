@@ -46,68 +46,67 @@ async def navegar_para_campanhas(page) -> bool:
     """Navega para a lista de campanhas de Product Ads."""
     try:
         await page.goto(ML_ADS_HOME, wait_until="networkidle", timeout=30000)
-        await aguardar_carregamento(page)
+        await asyncio.sleep(2)
 
         if await _detectar_login_redirect(page):
             return False
 
         # Se ja esta na pagina de campanhas, ok
-        if "product-ads" in page.url or "/campaigns" in page.url:
-            logger.info("Ja esta na pagina de Product Ads")
+        url_atual = page.url.lower()
+        if "product-ads" in url_atual and ("campaign" in url_atual or "product-ads" in url_atual):
+            logger.info(f"Ja esta na pagina de Product Ads: {page.url}")
+            await _aguardar_campanhas_carregar(page)
             return True
 
-        # Clicar no link "Ir para Product Ads"
-        seletores_link = [
-            "a:text('Ir para Product Ads')",
-            "a:text-matches('Product Ads', 'i')",
-            "a[href*='product-ads']",
-            "a[href*='product_ads']",
-        ]
-        for sel in seletores_link:
-            try:
-                el = await page.query_selector(sel)
-                if el:
-                    await el.click()
-                    await page.wait_for_load_state("networkidle", timeout=15000)
-                    await aguardar_carregamento(page)
-                    logger.info("Clicou em 'Ir para Product Ads'")
-                    return True
-            except Exception:
-                continue
+        logger.info(f"Na pagina: {page.url} — buscando link 'Ir para Product Ads'")
 
-        # Fallback: buscar pelo texto via JS
+        # Aguardar link aparecer (ate 10s)
         try:
-            clicou = await page.evaluate("""() => {
-                const links = document.querySelectorAll('a');
-                for (const a of links) {
-                    if (a.innerText && a.innerText.includes('Product Ads')) {
-                        a.click();
-                        return true;
-                    }
-                }
-                return false;
-            }""")
-            if clicou:
-                await page.wait_for_load_state("networkidle", timeout=15000)
-                await aguardar_carregamento(page)
-                logger.info("Clicou em 'Ir para Product Ads' via JS")
-                return True
-        except Exception:
-            pass
-
-        # Ultima tentativa: navegar direto para product-ads
-        try:
-            await page.goto(
-                "https://ads.mercadolivre.com.br/product-ads/campaigns",
-                wait_until="networkidle",
-                timeout=30000,
+            await page.wait_for_function(
+                """() => {
+                    const links = Array.from(document.querySelectorAll('a'));
+                    return links.some(a => (a.innerText || '').includes('Product Ads'));
+                }""",
+                timeout=10000,
             )
-            await aguardar_carregamento(page)
-            if not await _detectar_login_redirect(page):
-                logger.info("Navegou direto para product-ads/campaigns")
-                return True
         except Exception:
             pass
+
+        # Pegar o href do link "Ir para Product Ads"
+        href = await page.evaluate("""() => {
+            const links = Array.from(document.querySelectorAll('a'));
+            for (const a of links) {
+                const txt = (a.innerText || a.textContent || '').trim();
+                if (txt.includes('Product Ads')) {
+                    return a.href || null;
+                }
+            }
+            return null;
+        }""")
+
+        if href:
+            logger.info(f"Link 'Ir para Product Ads' encontrado: {href}")
+            await page.goto(href, wait_until="networkidle", timeout=30000)
+            await asyncio.sleep(2)
+            await _aguardar_campanhas_carregar(page)
+            logger.info(f"Navegou para Product Ads: {page.url}")
+            return True
+
+        # Extrair advertiserId da URL atual e montar URL direto
+        import re as _re
+        match = _re.search(r'advertiserId=(\d+)', page.url)
+        adv_id = match.group(1) if match else None
+        if adv_id:
+            campaigns_url = f"https://ads.mercadolivre.com.br/product-ads/campaigns?advertiserId={adv_id}"
+        else:
+            campaigns_url = "https://ads.mercadolivre.com.br/product-ads/campaigns"
+
+        await page.goto(campaigns_url, wait_until="networkidle", timeout=30000)
+        await asyncio.sleep(2)
+        await _aguardar_campanhas_carregar(page)
+        if not await _detectar_login_redirect(page):
+            logger.info(f"Navegou direto para: {campaigns_url}")
+            return True
 
         logger.warning("Nao conseguiu navegar para lista de campanhas")
         return False
@@ -115,6 +114,30 @@ async def navegar_para_campanhas(page) -> bool:
     except Exception as e:
         logger.error(f"Erro ao navegar para campanhas: {e}")
         return False
+
+
+async def _aguardar_campanhas_carregar(page, timeout_s: int = 15):
+    """Aguarda a lista de campanhas aparecer no DOM (linhas de tabela)."""
+    import time as _time
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        try:
+            contagem = await page.evaluate("""() => {
+                const sels = ['tr', '[role="row"]', '[class*="campaign"]', '[class*="row"]'];
+                for (const s of sels) {
+                    const els = document.querySelectorAll(s);
+                    if (els.length > 2) return els.length;
+                }
+                return 0;
+            }""")
+            if contagem > 2:
+                logger.info(f"Campanhas carregadas na pagina ({contagem} linhas)")
+                await asyncio.sleep(0.5)
+                return
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+    logger.warning("Timeout aguardando campanhas carregar — continuando mesmo assim")
 
 
 async def varrer_paginas_e_processar(page, human, nomes_alvo: set, pausar: bool, max_paginas: int = 50) -> dict:
@@ -136,7 +159,7 @@ async def varrer_paginas_e_processar(page, human, nomes_alvo: set, pausar: bool,
 
         await asyncio.sleep(0.8)
 
-        # JS: coleta todos os pares (texto, elementoLinha) visíveis na página
+        # JS: coleta todos os textos de linhas visíveis na página
         dados_pagina = await page.evaluate("""() => {
             const linhas = [];
             const candidatos = document.querySelectorAll(
@@ -150,6 +173,13 @@ async def varrer_paginas_e_processar(page, human, nomes_alvo: set, pausar: bool,
             }
             return linhas;
         }""")
+
+        # Log diagnostico: primeiros 3 textos e URL atual
+        logger.info(
+            f"Pagina {pagina+1} | URL: {page.url} | {len(dados_pagina)} linhas | "
+            f"Buscando: {list(restantes)[:5]} | "
+            f"Exemplos: {[t[:60] for t in dados_pagina[:3]]}"
+        )
 
         # Verificar quais nomes da lista aparecem nessa página
         matches_pagina = []
